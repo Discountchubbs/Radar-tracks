@@ -1,5 +1,3 @@
-merge-resolver.sh
-cat > merge-resolver.sh << 'EOF'
 #!/bin/bash
 
 # Abort any existing cherry-pick
@@ -20,7 +18,3 @@ git add -A
 # Complete the cherry-pick
 git commit -C 9ffbbf8022be64213af2b83ff6208b4687573671
 EOF
-
-# Make executable and run
-chmod +x merge-resolver.sh
-./merge-resolver.sh
