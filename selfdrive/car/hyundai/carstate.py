@@ -292,7 +292,7 @@ class CarState(CarStateBase):
                                           else cp_cam.vl["CAM_0x2a4"])
 
     # FrogPilot CarState functions
-    fp_ret.brakeLights = bool((cp.vl["TCS"]["DriverBraking"]) or (cp.vl["ESP_STATUS"]["BRAKE_PRESSED"]))
+    fp_ret.brakeLights = bool(cp.vl["TCS"]["DriverBraking"])
 
     if self.CP.carFingerprint in (CAR.KIA_K5_2025,) and "MSG_161" in cp_cam.vl:
       self.msg_161 = copy.copy(cp_cam.vl["MSG_161"])
