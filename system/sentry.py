@@ -137,7 +137,7 @@ def init(project: SentryProject) -> bool:
 
   short_branch = build_metadata.channel
 
-  if short_branch == "FrogPilot-Development":
+  if short_branch == "Chubbs":
     env = "Development"
   elif build_metadata.release_channel:
     env = "Release"

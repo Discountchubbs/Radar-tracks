@@ -83,6 +83,7 @@ frogpilot_default_params: list[tuple[str, str | bytes, int]] = [
   ("BlindSpotMetrics", "1", 3),
   ("BlindSpotPath", "1", 0),
   ("BorderMetrics", "0", 3),
+  ("BrakeSignal", "0", 2),
   ("CameraView", "3", 2),
   ("CarMake", "", 0),
   ("CarModel", "", 0),
@@ -158,6 +159,9 @@ frogpilot_default_params: list[tuple[str, str | bytes, int]] = [
   ("HolidayThemes", "1", 0),
   ("HumanAcceleration", "1", 2),
   ("HumanFollowing", "1", 2),
+  ("HyundaiRadarTracks", "1", 2),
+  ("HKGtuning", "0", 2),
+  ("HatTrick", "0", 2),
   ("IncreasedStoppedDistance", "0", 2),
   ("IncreaseThermalLimits", "0", 3),
   ("JerkInfo", "0", 3),
@@ -337,10 +341,10 @@ class FrogPilotVariables:
     self.tuning_levels = {key: lvl for key, _, lvl in frogpilot_default_params + misc_tuning_levels}
 
     short_branch = get_build_metadata().channel
-    self.development_branch = short_branch == "FrogPilot-Development"
-    self.release_branch = short_branch == "FrogPilot"
+    self.development_branch = short_branch == "Chubbs"
+    self.release_branch = short_branch == "ChubbsPilot"
     self.staging_branch = short_branch == "FrogPilot-Staging"
-    self.testing_branch = short_branch == "FrogPilot-Testing"
+    self.testing_branch = short_branch == "Development"
 
     self.frogpilot_toggles.frogs_go_moo = Path("/persist/frogsgomoo.py").is_file()
     self.frogpilot_toggles.block_user = self.development_branch and not self.frogpilot_toggles.frogs_go_moo
@@ -389,6 +393,8 @@ class FrogPilotVariables:
       vEgoStarting = 0.5
 
     tuning_level = params.get_int("TuningLevel") if params.get_bool("TuningLevelConfirmed") else 3
+
+    allow_far_lead_tracking = tuning_level >= 3 or self.frogpilot_toggles.frogs_go_moo
 
     default = params_default
     level = self.tuning_levels
@@ -510,6 +516,7 @@ class FrogPilotVariables:
     toggle.traffic_mode_jerk_speed = [clip(params.get_int("TrafficJerkSpeed") / 100, 0.01, 5) if traffic_profile and tuning_level >= level["TrafficJerkSpeed"] else clip(default.get_int("TrafficJerkSpeed") / 100, 0.01, 5), toggle.aggressive_jerk_speed]
     toggle.traffic_mode_jerk_speed_decrease = [clip(params.get_int("TrafficJerkSpeedDecrease") / 100, 0.01, 5) if traffic_profile and tuning_level >= level["TrafficJerkSpeedDecrease"] else clip(default.get_int("TrafficJerkSpeedDecrease") / 100, 0.01, 5), toggle.aggressive_jerk_speed_decrease]
     toggle.traffic_mode_follow = [clip(params.get_float("TrafficFollow"), 0.5, 5) if traffic_profile and tuning_level >= level["TrafficFollow"] else clip(default.get_float("TrafficFollow"), 0.5, 5), toggle.aggressive_follow]
+    toggle.hattrick_mode = openpilot_longitudinal and car_make == "hyundai" and params.get_bool("HatTrick") if tuning_level >= level["HatTrick"] else default.get_bool("HatTrick")
 
     custom_ui = params.get_bool("CustomUI") if tuning_level >= level["CustomUI"] else default.get_bool("CustomUI")
     toggle.acceleration_path = custom_ui and (params.get_bool("AccelerationPath") if tuning_level >= level["AccelerationPath"] else default.get_bool("AccelerationPath"))
@@ -558,10 +565,18 @@ class FrogPilotVariables:
 
     toggle.experimental_gm_tune = openpilot_longitudinal and car_make == "gm" and (params.get_bool("ExperimentalGMTune") if tuning_level >= level["ExperimentalGMTune"] else default.get_bool("ExperimentalGMTune"))
 
+    toggle.hyundai_radar_tracks = car_make == "hyundai" and params.get_bool("HyundaiRadarTracks") if tuning_level >= level["HyundaiRadarTracks"] else default.get_bool("HyundaiRadarTracks")
+    toggle.hkg_tuning = openpilot_longitudinal and car_make == "hyundai" and params.get_bool("HKGtuning") if tuning_level >= level["HKGtuning"] else default.get_bool("HKGtuning")
+
+    toggle.hyundai_radar_tracks = car_make == "hyundai" and params.get_bool("HyundaiRadarTracks") if tuning_level >= level["HyundaiRadarTracks"] else default.get_bool("HyundaiRadarTracks")
+    toggle.hkg_tuning = openpilot_longitudinal and car_make == "hyundai" and params.get_bool("HKGtuning") if tuning_level >= level["HKGtuning"] else default.get_bool("HKGtuning")
+
     toggle.experimental_mode_via_press = openpilot_longitudinal and (params.get_bool("ExperimentalModeActivation") if tuning_level >= level["ExperimentalModeActivation"] else default.get_bool("ExperimentalModeActivation"))
     toggle.experimental_mode_via_distance = toggle.experimental_mode_via_press and (params.get_bool("ExperimentalModeViaDistance") if tuning_level >= level["ExperimentalModeViaDistance"] else default.get_bool("ExperimentalModeViaDistance"))
     toggle.experimental_mode_via_lkas = not toggle.always_on_lateral_lkas and toggle.experimental_mode_via_press and car_make != "subaru" and (params.get_bool("ExperimentalModeViaLKAS") if tuning_level >= level["ExperimentalModeViaLKAS"] else default.get_bool("ExperimentalModeViaLKAS"))
     toggle.experimental_mode_via_tap = toggle.experimental_mode_via_press and (params.get_bool("ExperimentalModeViaTap") if tuning_level >= level["ExperimentalModeViaTap"] else default.get_bool("ExperimentalModeViaTap"))
+
+    toggle.far_lead_tracking = allow_far_lead_tracking and has_radar
 
     toggle.frogsgomoo_tweak = openpilot_longitudinal and car_make == "toyota" and (params.get_bool("FrogsGoMoosTweak") if tuning_level >= level["FrogsGoMoosTweak"] else default.get_bool("FrogsGoMoosTweak"))
     toggle.stoppingDecelRate = 0.01 if toggle.frogsgomoo_tweak else stoppingDecelRate
@@ -687,6 +702,7 @@ class FrogPilotVariables:
     toggle.stopped_timer = quality_of_life_visuals and (params.get_bool("StoppedTimer") if tuning_level >= level["StoppedTimer"] else default.get_bool("StoppedTimer"))
 
     toggle.rainbow_path = params.get_bool("RainbowPath") if tuning_level >= level["RainbowPath"] else default.get_bool("RainbowPath")
+    toggle.brake_signal= params.get_bool("BrakeSignal") if tuning_level >= level["BrakeSignal"] else default.get_bool("BrakeSignal")
 
     toggle.random_events = params.get_bool("RandomEvents") if tuning_level >= level["RandomEvents"] else default.get_bool("RandomEvents")
 
