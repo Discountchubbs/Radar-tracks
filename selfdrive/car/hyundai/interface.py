@@ -30,9 +30,9 @@ class CarInterface(CarInterfaceBase):
   @staticmethod
   def _get_params(ret, candidate, fingerprint, car_fw, disable_openpilot_long, experimental_long, docs):
     use_new_api = params.get_bool("NewLongAPI")
-
     ret.carName = "hyundai"
     ret.radarUnavailable = RADAR_START_ADDR not in fingerprint[1] or DBC[ret.carFingerprint]["radar"] is None
+    ret.customStockLongAvailable = True
 
     # These cars have been put into dashcam only due to both a lack of users and test coverage.
     # These cars likely still work fine. Once a user confirms each car works and a test route is
@@ -59,6 +59,7 @@ class CarInterface(CarInterfaceBase):
         # non-HDA2
         if 0x1cf not in fingerprint[CAN.ECAN]:
           ret.flags |= HyundaiFlags.CANFD_ALT_BUTTONS.value
+          ret.customStockLongAvailable = False
         # ICE cars do not have 0x130; GEARS message on 0x40 or 0x70 instead
         if 0x130 not in fingerprint[CAN.ECAN]:
           if 0x40 not in fingerprint[CAN.ECAN]:
@@ -114,7 +115,7 @@ class CarInterface(CarInterfaceBase):
       ret.longitudinalTuning.kiV = [0.0]
       ret.vEgoStopping = 0.10
       ret.vEgoStarting = 0.15
-      ret.longitudinalActuatorDelay = 0.5
+      ret.longitudinalActuatorDelay = 0.2
 
       if ret.flags & (HyundaiFlags.HYBRID | HyundaiFlags.EV):
           ret.startingState = False
@@ -123,19 +124,22 @@ class CarInterface(CarInterfaceBase):
           ret.startAccel = 1.6
 
       ret.longitudinalTuning.kpV = [0.4] if is_canfd_car else [0.1]
-      ret.stoppingDecelRate = 0.05 if (ret.flags & HyundaiFlags.MANDO_RADAR) else 0.2
+      if Params().get_bool("HyundaiRadarTracksAvailable"):
+          ret.stoppingDecelRate = 0.02  # Lower decel rate when we have working Mando radar tracks
+      else:
+          ret.stoppingDecelRate = 0.22   # Default  decel rate
 
     # HKG tuning with hat trick or just hat trick
     elif (hkg_tuning and hat_trick) or hat_trick:
       ret.longitudinalTuning.kiV = [0.02]
       ret.vEgoStopping = 0.10
       ret.vEgoStarting = 0.15
-      ret.longitudinalActuatorDelay = 0.5
+      ret.longitudinalActuatorDelay = 0.2
       ret.startAccel = 2.0
 
       ret.startingState = not bool(ret.flags & (HyundaiFlags.HYBRID | HyundaiFlags.EV))
-      ret.longitudinalTuning.kpV = [1.0] if is_canfd_car else [0.4]
-      ret.stoppingDecelRate = 0.15 if is_canfd_car else 0.1
+      ret.longitudinalTuning.kpV = [1.0] if is_canfd_car else [0.5]
+      ret.stoppingDecelRate = 0.3 if is_canfd_car else 0.2
 
     # Default tuning
     else:
@@ -144,7 +148,10 @@ class CarInterface(CarInterfaceBase):
 
     # API-specific tuning
     if use_new_api:
-      ret.stoppingDecelRate = 0.1
+      if Params().get_bool("HyundaiRadarTracksAvailable"):
+          ret.stoppingDecelRate = 0.02
+      else:
+          ret.stoppingDecelRate = 0.2
 
     # Determine experimental longitudinal availability
     unsupported_long_cars = (
@@ -278,6 +285,7 @@ class CarInterface(CarInterfaceBase):
       disable_ecu(logcan, sendcan, bus=CanBus(CP).ECAN, addr=0x7B1, com_cont_req=b'\x28\x83\x01')
 
   def _update(self, c, frogpilot_toggles):
+    sendcan = []
     ret, fp_ret = self.CS.update(self.cp, self.cp_cam, frogpilot_toggles)
 
     if self.CS.CP.openpilotLongitudinalControl:
@@ -286,7 +294,15 @@ class CarInterface(CarInterfaceBase):
         *create_button_events(self.CS.lkas_enabled, self.CS.lkas_previously_enabled, {1: FrogPilotButtonType.lkas}),
       ]
     else:
-      ret.buttonEvents = create_button_events(self.CS.lkas_enabled, self.CS.lkas_previously_enabled, {1: FrogPilotButtonType.lkas})
+      if self.params.get_bool("CustomStockLong"):
+        ret.buttonEvents = [
+          *create_button_events(self.CS.cruise_buttons[-1], self.CS.prev_cruise_buttons, BUTTONS_DICT),
+          *create_button_events(self.CS.lkas_enabled, self.CS.lkas_previously_enabled, {1: FrogPilotButtonType.lkas}),
+        ]
+        custom_long_msgs = self.CC.custom_stock_long.update_custom_stock_long(self.frame, self.CS, self.packer, self.CP)
+        sendcan.extend(custom_long_msgs)
+      else:
+        ret.buttonEvents = create_button_events(self.CS.lkas_enabled, self.CS.lkas_previously_enabled, {1: FrogPilotButtonType.lkas})
 
 
 
@@ -309,6 +325,7 @@ class CarInterface(CarInterfaceBase):
     and not self.CS.params_list.hyundai_radar_tracks_available_cache:
       events.add(car.CarEvent.EventName.hyundaiRadarTracksAvailable)
 
+    ret.customStockLong = self.update_custom_stock_long()
     ret.events = events.to_msg()
 
     return ret, fp_ret

@@ -356,7 +356,6 @@ class FrogPilotVariables:
 
   def update(self, holiday_theme, started):
     openpilot_installed = params.get_bool("HasAcceptedTerms")
-
     key = "CarParams" if started else "CarParamsPersistent"
     msg_bytes = params.get(key, block=openpilot_installed and started)
 

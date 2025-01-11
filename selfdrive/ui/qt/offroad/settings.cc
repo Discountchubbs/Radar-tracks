@@ -36,6 +36,18 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       "../assets/offroad/icon_speed_limit.png",
     },
     {
+      "CustomStockLong",
+      tr("Custom Stock Longitudinal Control"),
+      tr("When enabled, Chubbs will attempt to control stock your car with ACC button presses."),
+      "../assets/offroad/icon_openpilot.png",
+    },
+    {
+      "CustomStockLongPlanner",
+      tr("Use Planner Speed"),
+      "",
+      "../assets/offroad/icon_openpilot.png",
+    },
+    {
       "ExperimentalMode",
       tr("Experimental Mode"),
       "",
@@ -112,8 +124,14 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
   toggles["ExperimentalMode"]->setActiveIcon("../assets/img_experimental.svg");
   toggles["ExperimentalMode"]->setConfirmation(true, true);
   toggles["ExperimentalLongitudinalEnabled"]->setConfirmation(true, false);
+  toggles["CustomStockLong"]->setConfirmation(true, false);
 
   connect(toggles["ExperimentalLongitudinalEnabled"], &ToggleControl::toggleFlipped, [=]() {
+    updateToggles();
+  });
+
+  // ChubbsPilot Signals
+  connect(toggles["CustomStockLong"], &ToggleControl::toggleFlipped, [=]() {
     updateToggles();
   });
 
@@ -156,6 +174,8 @@ void TogglesPanel::updateToggles() {
 
   auto experimental_mode_toggle = toggles["ExperimentalMode"];
   auto op_long_toggle = toggles["ExperimentalLongitudinalEnabled"];
+  auto custom_stock_long_toggle = toggles["CustomStockLong"];
+  auto custom_stock_long_planner = toggles["CustomStockLongPlanner"];
   const QString e2e_description = QString("%1<br>"
                                           "<h4>%2</h4><br>"
                                           "%3<br>"
@@ -179,13 +199,34 @@ void TogglesPanel::updateToggles() {
       params.remove("ExperimentalLongitudinalEnabled");
     }
     op_long_toggle->setVisible(CP.getExperimentalLongitudinalAvailable());
+
+    if (!CP.getCustomStockLongAvailable()) {
+      params.remove("CustomStockLong");
+    }
+    custom_stock_long_toggle->setVisible(CP.getCustomStockLongAvailable());
+
+
     if (hasLongitudinalControl(CP)) {
       // normal description and toggle
       experimental_mode_toggle->setEnabled(true);
       experimental_mode_toggle->setDescription(e2e_description);
       long_personality_setting->setEnabled(true);
+      op_long_toggle->setEnabled(true);
+      custom_stock_long_toggle->setEnabled(false);
+      custom_stock_long_planner->setEnabled(false);
+    } else if (params.getBool("CustomStockLong")) {
+      op_long_toggle->setEnabled(false);
+      custom_stock_long_toggle->setEnabled(true);
+      custom_stock_long_planner->setEnabled(true);
+      if (params.getBool("CustomStockLongPlanner")) {
+        experimental_mode_toggle->setEnabled(true);
+        long_personality_setting->setEnabled(true);
+      } else {
+        experimental_mode_toggle->setEnabled(false);
+        long_personality_setting->setEnabled(false);
+      }
     } else {
-      // no long for now
+       // no long for now
       experimental_mode_toggle->setEnabled(false);
       long_personality_setting->setEnabled(false);
       params.remove("ExperimentalMode");
@@ -197,13 +238,21 @@ void TogglesPanel::updateToggles() {
       if (CP.getExperimentalLongitudinalAvailable()) {
         long_desc = tr("Enable the openpilot longitudinal control (alpha) toggle to allow Experimental mode.");
       }
+      op_long_toggle->setEnabled(CP.getExperimentalLongitudinalAvailable());
       experimental_mode_toggle->setDescription("<b>" + long_desc + "</b><br><br>" + e2e_description);
+      custom_stock_long_toggle->setEnabled(CP.getCustomStockLongAvailable());
+      custom_stock_long_planner->setEnabled(false);
     }
 
     experimental_mode_toggle->refresh();
+    op_long_toggle->refresh();
+    custom_stock_long_toggle->refresh();
+    custom_stock_long_planner->refresh();
   } else {
     experimental_mode_toggle->setDescription(e2e_description);
     op_long_toggle->setVisible(false);
+    custom_stock_long_toggle->setVisible(false);
+    custom_stock_long_planner->setVisible(false);
   }
 }
 
