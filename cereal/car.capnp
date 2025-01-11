@@ -247,6 +247,17 @@ struct CarState {
 
   # clutch (manual transmission only)
   clutchPressed @28 :Bool;
+  customStockLong @52 :CustomStockLong;
+
+  struct CustomStockLong {
+    cruiseButton @0 :Int16;
+    finalSpeedKph @1 :Float32;
+    vCruiseKphPrevDEPRECATED @2 :Float32;
+    targetSpeed @3 :Float32;
+    vSetDis @4 :Float32;
+    speedDiff @5 :Float32;
+    buttonType @6 :Int16;
+  }
 
   # blindspot sensors
   leftBlindspot @33 :Bool; # Is there something blocking the left lane change
@@ -496,6 +507,8 @@ struct CarParams {
   enableBsm @56 :Bool;       # blind spot monitoring
   flags @64 :UInt32;         # flags for car specific quirks
   fpFlags @76 :UInt32;       # flags for car specific quirks that are fingerprint specific
+  customStockLongAvailable @77 :Bool;
+  pcmCruiseSpeed @78 :Bool;
   experimentalLongitudinalAvailable @71 :Bool;
 
   minEnableSpeed @7 :Float32;

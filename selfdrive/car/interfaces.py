@@ -355,7 +355,8 @@ class CarInterfaceBase(ABC):
     ret.minSteerSpeed = 0.
     ret.wheelSpeedFactor = 1.0
 
-    ret.pcmCruise = True     # openpilot's state is tied to the PCM's cruise state on most cars
+    ret.pcmCruise = True # openpilot's state is tied to the PCM's cruise state on most cars
+    ret.pcmCruiseSpeed = True
     ret.minEnableSpeed = -1. # enable is done by stock ACC, so ignore this
     ret.steerRatioRear = 0.  # no rear steering, at least on the listed cars aboveA
     ret.openpilotLongitudinalControl = False
@@ -433,6 +434,18 @@ class CarInterfaceBase(ABC):
 
     return ret, fp_ret
 
+  def get_cp_v_cruise_non_pcm_state(self, cs_out, vCruise,
+                                    enable_buttons=(ButtonType.accelCruise, ButtonType.decelCruise),
+                                    resume_button=(ButtonType.accelCruise, ButtonType.resumeCruise)):
+
+    if cs_out.cruiseState.available:
+      for b in self.CS.button_events:
+        # Use FrogPilot's custom stock long control flag
+        if not self.CP.pcmCruise or self.CP.pcmCruiseSpeed:
+          if b.type in enable_buttons and not b.pressed:
+            return True
+
+    return False
 
   def create_common_events(self, cs_out, extra_gears=None, pcm_enable=True, allow_enable=True,
                            enable_buttons=(ButtonType.accelCruise, ButtonType.decelCruise)):

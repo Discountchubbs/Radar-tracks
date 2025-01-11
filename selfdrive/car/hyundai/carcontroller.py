@@ -10,11 +10,13 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.car import apply_driver_steer_torque_limits, common_fault_avoidance, make_tester_present_msg
 from openpilot.selfdrive.car.hyundai import hyundaicanfd, hyundaican
 from openpilot.selfdrive.car.hyundai.hyundaicanfd import CanBus
-from openpilot.selfdrive.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CANFD_CAR, CAR, CAMERA_SCC_CAR
+from openpilot.selfdrive.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CANFD_CAR, CAR, CAMERA_SCC_CAR, LEGACY_SAFETY_MODE_CAR
 from openpilot.selfdrive.car.interfaces import CarControllerBase
 
 from openpilot.selfdrive.frogpilot.controls.lib.frogpilot_acceleration import get_max_allowed_accel
-
+from openpilot.selfdrive.frogpilot.controls.lib.frogpilot_vcruise import FrogPilotVCruise
+from openpilot.selfdrive.frogpilot.controls.frogpilot_planner import FrogPilotPlanner
+from openpilot.selfdrive.frogpilot.frogpilot_variables import CRUISING_SPEED
 VisualAlert = car.CarControl.HUDControl.VisualAlert
 LongCtrlState = car.CarControl.Actuators.LongControlState
 
@@ -23,6 +25,7 @@ LongCtrlState = car.CarControl.Actuators.LongControlState
 MAX_ANGLE = 85
 MAX_ANGLE_FRAMES = 89
 MAX_ANGLE_CONSECUTIVE_FRAMES = 2
+ButtonType = car.CarState.ButtonEvent.Type
 
 
 def process_hud_alert(enabled, fingerprint, hud_control):
@@ -72,10 +75,45 @@ class CarController(CarControllerBase):
       self.sm = messaging.SubMaster(sub_services)
 
     self.param_s = Params()
+
+    self.timer = 0
+    self.final_speed_kph = 0
+    self.init_speed = 0
+    self.v_set_dis = 0
+    self.v_cruise_min = 0 if self.param_s.get_bool("CustomStockLong") else CRUISING_SPEED
+    self.button_type = 0
+    self.button_select = 0
+    self.button_count = 0
+    self.target_speed = 0
+    self.t_interval = 7
+    self.cruise_button = None
+    self.speed_diff = 0
+    self.frogpilot_planner = FrogPilotPlanner()
+    self.frogpilot_vcruise = FrogPilotVCruise()
+    self.custom_stock_planner_speed = self.param_s.get_bool("CustomStockLongPlanner")
     self.hkg_tuning = self.param_s.get_bool('HKGtuning')
     self.jerk_limiter = JerkLimiter()
 
+  def get_custom_stock_long_state(self):
+      """Get the custom stock longitudinal state for FrogPilot"""
+      customStockLong = car.CarState.CustomStockLong.new_message()
+      customStockLong.cruiseButton = 0 if self.cruise_button is None else int(self.cruise_button)
+      customStockLong.finalSpeedKph = float(self.final_speed_kph)
+      customStockLong.targetSpeed = float(self.target_speed)
+      customStockLong.vSetDis = float(self.v_set_dis)
+      customStockLong.speedDiff = float(self.speed_diff)
+      customStockLong.buttonType = int(self.button_type)
+      return customStockLong
+
   def update(self, CC, CS, now_nanos, frogpilot_toggles):
+    if not self.CP.pcmCruiseSpeed or (self.CP.openpilotLongitudinalControl and self.frame % 5 == 0):
+      self.sm.update(0)
+
+    if self.frame % 200 == 0 and self.param_s.get_bool("CustomStockLong"):
+        self.custom_stock_planner_speed = self.param_s.get_bool("CustomStockLongPlanner")
+
+        # Let FrogPilot's planner handle speed/cruise state
+        self.frogpilot_planner.update(self.sm['frogpilotPlan'])
     actuators = CC.actuators
     hud_control = CC.hudControl
     accel = actuators.accel
@@ -180,6 +218,15 @@ class CarController(CarControllerBase):
       else:
         # button presses
         can_sends.extend(self.create_button_messages(CC, CS, use_clu11=False))
+        if not (CC.cruiseControl.cancel or CC.cruiseControl.resume) and CS.out.cruiseState.enabled and not self.CP.pcmCruiseSpeed:
+          if self.CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS:
+            # TODO: resume for alt button cars
+            pass
+          else:
+            self.cruise_button = self.get_cruise_buttons(CS, CC.vCruise)
+            if self.cruise_button is not None:
+              if self.frame % 2 == 0:
+                can_sends.append(hyundaicanfd.create_buttons(self.packer, self.CP, self.CAN, ((self.frame // 2) + 1) % 0x10, self.cruise_button))
     else:
       can_sends.append(hyundaican.create_lkas11(self.packer, self.frame, self.CP, apply_steer, apply_steer_req,
                                                 torque_fault, CS.lkas11, sys_warning, sys_state, CC.enabled,
@@ -188,8 +235,23 @@ class CarController(CarControllerBase):
 
       if not self.CP.openpilotLongitudinalControl:
         can_sends.extend(self.create_button_messages(CC, CS, use_clu11=True))
-
-
+        if not (CC.cruiseControl.cancel or CC.cruiseControl.resume) and CS.out.cruiseState.enabled and not self.CP.pcmCruiseSpeed:
+          self.cruise_button = self.get_cruise_buttons(CS, CC.vCruise)
+          if self.cruise_button is not None:
+            if self.CP.carFingerprint in LEGACY_SAFETY_MODE_CAR:
+              send_freq = 1
+              # Use FrogPilot's planner states instead of internal states
+              if not (self.frogpilot_planner.vtscActive or
+                  self.frogpilot_planner.mtscActive > 1) and abs(self.target_speed - self.v_set_dis) <= 2:
+                send_freq = 5
+              # send resume at a max freq of 10Hz
+              if (self.frame - self.last_button_frame) * DT_CTRL > 0.1 * send_freq:
+                # send 25 messages at a time to increases the likelihood of cruise buttons being accepted
+                can_sends.extend([hyundaican.create_clu11(self.packer, self.frame, CS.clu11, self.cruise_button, self.CP)] * 25)
+                if (self.frame - self.last_button_frame) * DT_CTRL >= 0.15 * send_freq:
+                  self.last_button_frame = self.frame
+            elif self.frame % 2 == 0:
+              can_sends.extend([hyundaican.create_clu11(self.packer, (self.frame // 2) + 1, CS.clu11, self.cruise_button, self.CP)] * 25)
       if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
         # TODO: unclear if this is needed
         jerk = self.jerk_limiter.jerk_upper_limit if actuators.longControlState == LongCtrlState.pid else self.jerk_limiter.jerk_lower_limit
@@ -253,3 +315,89 @@ class CarController(CarControllerBase):
             self.last_button_frame = self.frame
 
     return can_sends
+
+  def get_cruise_buttons_status(self, CS):
+    if not CS.out.cruiseState.enabled or CS.cruise_buttons[-1] != Buttons.NONE:
+      self.timer = 40
+    elif self.timer:
+      self.timer -= 1
+    else:
+      return 1
+    return 0
+
+  def get_button_type(self, button_type):
+    self.type_status = "type_" + str(button_type)
+    self.button_picker = getattr(self, self.type_status, lambda: "default")
+    return self.button_picker()
+
+  def reset_button(self):
+    if self.button_type != 3:
+      self.button_type = 0
+
+  def type_default(self):
+    self.button_type = 0
+    return None
+
+  def type_0(self):
+    self.button_count = 0
+    self.target_speed = self.init_speed
+    self.speed_diff = self.target_speed - self.v_set_dis
+    if self.target_speed > self.v_set_dis:
+      self.button_type = 1
+    elif self.target_speed < self.v_set_dis and self.v_set_dis > self.v_cruise_min:
+      self.button_type = 2
+    return None
+
+  def type_1(self):
+    cruise_button = Buttons.RES_ACCEL
+    self.button_count += 1
+    # Transition to waiting state if target reached or max presses hit
+    if self.target_speed <= self.v_set_dis or self.button_count > 5:
+        self.button_count = 0
+        self.button_type = 3  # Transition to waiting state
+    return cruise_button
+
+  def type_2(self):
+    cruise_button = Buttons.SET_DECEL
+    self.button_count += 1
+    if self.target_speed >= self.v_set_dis or self.v_set_dis <= self.v_cruise_min or self.button_count > 5:
+        self.button_count = 0
+        self.button_type = 3  # Transition to waiting state
+    return cruise_button
+
+  def type_3(self):
+    cruise_button = None
+    self.button_count += 1
+    if self.button_count > self.t_interval:
+      self.button_type = 0
+    return cruise_button
+
+
+  def get_button_control(self, CS, final_speed, v_cruise_kph_prev):
+    # Convert speeds based on metric setting from FrogPilot
+    self.init_speed = round(min(final_speed, v_cruise_kph_prev) *
+                          (CV.KPH_TO_MPH if not CS.params_list.is_metric else 1))
+    self.v_set_dis = round(CS.out.cruiseState.speed *
+                          (CV.MS_TO_MPH if not CS.params_list.is_metric else CV.MS_TO_KPH))
+    cruise_button = self.get_button_type(self.button_type)
+    return cruise_button
+
+
+  def get_cruise_buttons(self, CS, v_cruise_kph_prev):
+    cruise_button = None
+    if not CS.out.cruiseState.enabled:
+      return None
+    if not self.get_cruise_buttons_status(CS):
+      return None
+    target_speed = self.frogpilot_vcruise.update(
+        CS.out.vEgo,
+        self.frogpilot_planner.curveSpeedLimit,
+        self.frogpilot_planner.speedLimit,
+        v_cruise_kph_prev,
+        self.frogpilot_planner.vtscActive,
+        self.frogpilot_planner.mtscActive,
+        self.frogpilot_planner.slcActive
+    )
+    self.final_speed_kph = target_speed * CV.MS_TO_KPH
+    cruise_button = self.get_button_control(CS, self.final_speed_kph, v_cruise_kph_prev)  # MPH/KPH based button presses
+    return cruise_button
